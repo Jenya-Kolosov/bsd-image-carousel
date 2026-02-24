@@ -1,0 +1,2375 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Diagonal Image Carousel</title>
+
+  <style>
+    /* ========== БАЗА ========== */
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    html { height: 100%; background: #efefef; }
+
+    body {
+      --header-offset-y: 37px;
+      height: calc(var(--app-vh, 1vh) * 100);
+      min-height: 100vh;
+      overflow: hidden;
+      position: relative;
+      font-family: Arial, sans-serif;
+      background: transparent;
+
+      /* ГЛОБАЛЬНАЯ КЛЕТКА (теперь в 2 раза больше) */
+      --cell: 20px;
+
+      /* safe areas for mobile overlay calculations */
+      --overlay-safe-top: env(safe-area-inset-top);
+      --overlay-safe-bottom: env(safe-area-inset-bottom);
+
+      /* Header / Gallery spacing (sync via JS) */
+      /* header-offset controls both header position
+   and vertical rhythm of gallery */
+      --header-offset: calc(var(--cell) * 1.5);
+      --header-side: calc(var(--cell) * 2);
+      --header-h: 40px;
+      --gallery-top-pad: calc(var(--header-offset) + var(--header-h) + var(--header-offset));
+    }
+
+    /* ===== ФИКСИРОВАННЫЙ ПАТТЕРН (как карта прозрачности) =====
+       клетка = --cell (20), шаг = 2*cell (40), смещение = cell (20) */
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      z-index: -1;
+      pointer-events: none;
+
+      background-color: #efefef;
+      background-image:
+        linear-gradient(45deg,
+          #d1cfcf 25%,
+          transparent 25%,
+          transparent 75%,
+          #d1cfcf 75%,
+          #d1cfcf
+        ),
+        linear-gradient(45deg,
+          #d1cfcf 25%,
+          transparent 25%,
+          transparent 75%,
+          #d1cfcf 75%,
+          #d1cfcf
+        );
+
+      background-size: calc(var(--cell) * 2) calc(var(--cell) * 2);
+      background-position: 0 0, var(--cell) var(--cell);
+
+      transform: translateZ(0);
+      will-change: transform;
+    }
+
+    /* ========== СЛАЙДЕР ========== */
+    .slider-container {
+      position: absolute;
+      width: 100vw;
+      height: calc(var(--app-vh, 1vh) * 100);
+      min-height: 100vh;
+
+      --slide-dur: 480ms;
+      --slide-ease: cubic-bezier(.22,.61,.36,1);
+    }
+
+    .slide {
+      position: absolute;
+      width: var(--slide-w, 430px);
+      height: var(--slide-h, 540px);
+      background: lightblue;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+
+      transition:
+        transform var(--slide-dur) var(--slide-ease),
+        left      var(--slide-dur) var(--slide-ease),
+        top       var(--slide-dur) var(--slide-ease);
+
+      cursor: pointer;
+      z-index: 10;
+    }
+    .slide img { width: 100%; height: 100%; object-fit: cover; object-position: center; }
+
+    /* ========== ОВЕРЛЕЙ ========== */
+    .overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,.9);
+      display: none;
+      justify-content: center;
+      align-items: center;
+      z-index: 1000;
+    }
+    .overlay.active { display: flex; }
+
+    .overlay .figure {
+      position: relative;
+      display: inline-block;
+      max-width: 90vw;
+    }
+    .overlay .figure img {
+      width: auto;
+      height: auto;
+      max-width: 92vw;
+      /* fit fully in viewport without artificial bars */
+      max-height: calc(100vh - var(--overlay-safe-top, 0px) - var(--overlay-safe-bottom, 0px) - 140px);
+      object-fit: contain;
+      border-radius: 12px;
+      display: block;
+      image-rendering: auto;
+    }
+
+    /* ======= UI НИЖЕ КАРТИНКИ ======= */
+    .overlay .below-ui {
+      position: absolute;
+      left: 0;
+      top: calc(100% + var(--below-offset, 20px));
+      width: 100%;
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      align-items: center;
+      z-index: 1004;
+      pointer-events: auto;
+    }
+
+    .overlay .below-ui .number {
+      grid-column: 1;
+      justify-self: start;
+      color: #fff;
+      font-size: 14px;
+      line-height: 1;
+      white-space: nowrap;
+      user-select: none;
+    }
+
+    .overlay .info-btn {
+      grid-column: 2;
+      justify-self: center;
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      background: #fff;
+      color: #000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      font-weight: 700;
+      line-height: 1;
+      cursor: pointer;
+      user-select: none;
+      transition: background 150ms ease, transform 120ms ease;
+    }
+    @media (hover: hover) and (pointer: fine) {
+    .overlay .info-btn:hover { background: #75A4F8; }
+    }
+    .overlay .info-btn.active { background: #75A4F8; }
+    .overlay .info-btn:active { transform: scale(0.95); }
+
+    /* ======= blur под попапом ======= */
+    .overlay .popup-backdrop {
+      position: absolute;
+      inset: 0;
+      border-radius: 12px;
+      clip-path: inset(0 round 12px);
+      -webkit-clip-path: inset(0 round 12px);
+      pointer-events: none;
+
+      opacity: 0;
+      visibility: hidden;
+      transition: opacity 180ms ease, visibility 180ms ease;
+      z-index: 1002;
+
+      background: rgba(0,0,0,0.08);
+    }
+    .overlay .popup-backdrop.active {
+      opacity: 1;
+      visibility: visible;
+    }
+    @supports ((backdrop-filter: blur(4px)) or (-webkit-backdrop-filter: blur(4px))) {
+      .overlay .popup-backdrop.active {
+        backdrop-filter: blur(4px);
+        -webkit-backdrop-filter: blur(4px);
+        background: rgba(0,0,0,0.02);
+      }
+    }
+
+    /* ======= ПОПАП ======= */
+    .overlay .info-popup {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+
+      width: auto;
+      max-width: var(--popup-max-w, 520px);
+      max-height: var(--popup-max-h, 360px);
+
+      background: rgba(0,0,0,1);
+      color: #fff;
+
+      border-radius: 12px;
+      padding: 16px;
+
+      z-index: 1003;
+
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      transform: translate(-50%, -50%) scale(0.96);
+      transition:
+        opacity 180ms ease,
+        transform 180ms ease,
+        visibility 180ms ease;
+
+      box-shadow: 0 10px 30px rgba(0,0,0,.35);
+      overflow: auto;
+    }
+    .overlay .info-popup.active {
+      opacity: 1;
+      visibility: visible;
+      pointer-events: auto;
+      transform: translate(-50%, -50%) scale(1);
+    }
+
+    .overlay .info-popup .popup-title{
+      font-size: 16px;
+      font-weight: 700;
+      line-height: 1.25;
+      margin-bottom: 10px;
+    }
+    .overlay .info-popup .popup-body{
+      font-size: 14px;
+      line-height: 1.35;
+      white-space: normal;
+    }
+    .overlay .info-popup .popup-author{
+      margin-top: 16px;
+      font-size: 14px;
+      line-height: 1.2;
+      opacity: 0.9;
+    }
+
+    /* ========== КНОПКА ЗАКРЫТЬ ========== */
+    .close-btn {
+      position: fixed;
+      top: 40px;
+      right: 40px;
+      width: 30px;
+      height: 30px;
+      background: #fff;
+      border-radius: 50%;
+      cursor: pointer;
+      z-index: 1003;
+      transition: background 150ms ease, transform 120ms ease;
+    }
+    .close-btn:hover { background: #75A4F8; }
+    .close-btn:active { transform: scale(0.95); }
+    .close-btn::before, .close-btn::after {
+      content: "";
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: 16px;
+      height: 2px;
+      background: #000;
+      transform-origin: center;
+    }
+    .close-btn::before { transform: translate(-50%,-50%) rotate(45deg); }
+    .close-btn::after  { transform: translate(-50%,-50%) rotate(-45deg); }
+
+    /* ========== Невидимые зоны для клика на фоне слайдера ========== */
+    .navigation { position: absolute; inset: 0; z-index: 5; }
+    .navigation .left, .navigation .right {
+      position: absolute; top: 0; width: 50%; height: 100%; cursor: pointer;
+    }
+    .navigation .left { left: 0; }
+    .navigation .right { right: 0; }
+
+    /* ========== Кнопки навигации в оверлее ========== */
+    .overlay .nav-btn {
+      position: fixed; top: 50%; transform: translateY(-50%);
+      width: 30px; height: 30px;
+      background: #fff;
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 14px; font-weight: 700; line-height: 1; user-select: none;
+      cursor: pointer; z-index: 1003;
+      color: #000;
+      transition: background 150ms ease, transform 120ms ease;
+    }
+    .overlay .nav-left  { left: 40px; }
+    .overlay .nav-right { right: 40px; }
+    .overlay .nav-btn:hover { background: #75A4F8; }
+    .overlay .nav-btn:active { transform: translateY(-50%) scale(0.95); }
+
+
+        /* ========== VIEW TOGGLE (40x40, встроено по сетке) ========== */
+    .view-btn{
+      position: fixed;
+      left: calc(var(--cell) * 2); /* первая кнопка */
+      bottom: var(--ui-bottom, calc(var(--cell) * 2));
+      width: 40px;
+      height: 40px;
+      border-radius: 0;
+      background: #efefef;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1200;
+      cursor: pointer;
+      user-select: none;
+
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      transform: translateY(6px);
+      transition:
+        opacity 200ms ease,
+        transform 200ms ease,
+        visibility 200ms ease,
+        background 150ms ease;
+    }
+    .view-btn.show{
+      opacity: 1;
+      visibility: visible;
+      pointer-events: auto;
+      transform: translateY(0);
+    }
+    .view-btn:hover{ background: rgba(58,58,58,0.95); }
+    /* в режиме галереи кнопка активна (фон графит) */
+    body.gallery-mode .view-btn{ background: rgba(58,58,58,0.95); }
+
+    
+.view-icon{ width: 18px; height: 18px; display:flex; align-items:center; justify-content:center; }
+.view-icon svg{ width:18px; height:18px; display:block; }
+
+/* Цвет иконок наследуем от color кнопки */
+.view-btn{ color:#d1cfcf; }
+.view-btn:hover{ color:#fff; }
+body.gallery-mode .view-btn{ background: rgba(58,58,58,0.95); color:#d1cfcf; }
+body.gallery-mode .view-btn:hover{ color:#fff; }
+
+/* НИКАКОЙ обводки */
+.view-icon .tile,
+.view-icon .fill{
+  fill: currentColor;
+  stroke: none !important;
+}
+
+/* Иконки: в слайдере показываем "grid" (4 квадрата), в галерее — "stack" */
+.view-btn[data-view="slider"] .icon-line{ display:none; }
+.view-btn[data-view="gallery"] .icon-gallery{ display:none; }
+    .view-btn[data-view="slider"] .icon-line{ display:none; }
+    .view-btn[data-view="gallery"] .icon-gallery{ display:none; }
+
+
+    /* ========== PLAY/PAUSE (40x40, встроено по сетке) ========== */
+    .pp-btn {
+      position: fixed;
+
+      /* слева ровно 2 клетки */
+      left: calc(var(--cell) * 5);
+
+      /* снизу задаём через переменную, её выставляет JS по сетке */
+      bottom: var(--ui-bottom, calc(var(--cell) * 2));
+
+      width: 40px;
+      height: 40px;
+      border-radius: 0;
+
+      background: #efefef;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+
+      z-index: 1200;
+      cursor: pointer;
+      user-select: none;
+
+      /* мягкое появление/исчезание */
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      transform: translateY(6px);
+      transition:
+        opacity 200ms ease,
+        transform 200ms ease,
+        visibility 200ms ease,
+        background 150ms ease;
+    }
+
+    .pp-btn.show {
+      opacity: 1;
+      visibility: visible;
+      pointer-events: auto;
+      transform: translateY(0);
+    }
+
+    /* hover — фон графит */
+    .pp-btn:hover { background: rgba(58,58,58,0.95); }
+
+    /* ========== PLAY/PAUSE ICONS (SVG) ========== */
+    .pp-btn{ color:#d1cfcf; }
+    .pp-btn:hover{ color:#fff; }
+    .pp-btn.paused{ color:#d1cfcf; background: rgba(58,58,58,0.95); }
+    .pp-btn.paused:hover{ color:#fff; }
+
+    .pp-btn .pp-svg{ display:none; width:18px; height:18px; }
+    .pp-btn .pp-svg .shape{ fill:currentColor; stroke:none; }
+    .pp-btn[data-state="pause"] .pp-pause{ display:block; }
+    .pp-btn[data-state="play"] .pp-play{ display:block; }
+
+    /* ========== GALLERY (Pinterest-like, но верхний ряд ровный) ========== */
+    .gallery-container{
+      position: relative;
+      width: 100%;
+      height: auto;
+      min-height: 100vh;
+      padding: calc(var(--cell) * 2);
+      overflow: visible;
+      display: none;
+    }
+
+    body.gallery-mode{
+      overflow: auto;
+    }
+    body.gallery-mode::before{
+      background-image: none;
+      background-color: #efefef; /* заливка из “светлого” тона шахматки */
+    }
+    body.gallery-mode .slider-container{
+      display: none;
+    }
+    body.gallery-mode .gallery-container{
+      display: block;
+      height: auto;
+      min-height: 100vh;
+
+      /* равные отступы: верх → хедер и хедер → картинки */
+      padding-top: var(--gallery-top-pad, calc(var(--cell) * 2 + 80px));
+    }
+    /* --- Mobile smooth gallery enter: hide until first layout settled (prevents "fly-in") --- */
+    body.gallery-prep .gallery-container{
+      opacity: 0;
+      transform: translateY(10px);
+      transition: none !important;
+      pointer-events: none;
+    }
+    body.gallery-mode .gallery-container{
+      opacity: 1;
+      transform: translateY(0);
+      transition: opacity 160ms ease, transform 160ms ease;
+    }
+
+
+    body.gallery-mode .navigation{
+      display: none;
+      pointer-events: none;
+    }
+
+
+        /* === Gallery layout: true masonry via CSS columns (no empty spaces) === */
+    .gallery-container{
+      --g-gap: 20px;
+      column-gap: var(--g-gap);
+      /* default desktop columns (overridden below) */
+      column-count: 4;
+    }
+
+    body.gallery-mode .gallery-container{
+      display: block;
+    }
+
+    /* Items flow inside columns */
+    .gallery-item{
+      display: inline-block;
+      width: 100%;
+      margin: 0 0 var(--g-gap);
+      break-inside: avoid;
+      border-radius: 10px;
+      overflow: hidden;
+      cursor: pointer;
+      user-select: none;
+      position: relative;
+    }
+
+    .gallery-item img{
+      width: 100%;
+      height: auto;
+      display: block;
+      object-fit: cover;
+    }
+
+    /* In Gallery mode: keep real aspect ratio (no crop) */
+    body.gallery-mode .gallery-item img{
+      object-fit: contain !important;
+    }
+
+    /* hover — мягкое градиентное затенение сверху */
+    .gallery-item::before{
+      content:"";
+      position:absolute;
+      inset:0;
+      pointer-events:none;
+      background: linear-gradient(
+        to bottom,
+        rgba(58,58,58,0.60),
+        rgba(58,58,58,0.20) 40%,
+        rgba(58,58,58,0.00) 70%
+      );
+      opacity: 0;
+      transition: opacity 180ms ease;
+    }
+    .gallery-item:hover::before{ opacity: 1; }
+
+    /* Desktop column counts */
+    @media (min-width: 1600px){
+      body.gallery-mode .gallery-container{ column-count: 6; }
+    }
+    /* MacBook 14" (~1512px CSS width): 5 columns */
+    @media (min-width: 1200px) and (max-width: 1599px){
+      body.gallery-mode .gallery-container{ column-count: 5; }
+    }
+    @media (min-width: 900px) and (max-width: 1199px){
+      body.gallery-mode .gallery-container{ column-count: 4; }
+    }
+
+
+    /* ========== HEADER LINKS ========== */
+    .top-header{
+      position: fixed;
+      top: var(--header-offset-y, var(--header-offset, 40px));
+      right: var(--header-side, 40px);
+      display: flex;
+      gap: 18px;
+      z-index: 900;
+      font-size: 14px;
+      line-height: 1;
+      user-select: none;
+    }
+    .top-link{
+      color: #000;
+      font-weight: 700;
+      text-decoration: none;
+      padding: 6px 8px;
+      border-radius: 6px;
+      transition: color 150ms ease, background 150ms ease;
+    }
+    .top-link:hover{ color: #75A4F8; }
+    .top-link.active{ color: #75A4F8; }
+
+
+    /* ========== ABOUT MODAL ========== */
+    .about-modal{
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 2000;
+
+      background: rgba(0,0,0,0.7);
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
+      padding: 40px 20px;
+    }
+    .about-modal.active{ display:flex; }
+
+    .about-card{
+      /* не больше 50% на десктопе */
+      width: min(900px, 92vw);
+      max-width: 900px;
+
+      background: rgba(0,0,0,1);
+      color: #fff;
+
+      border: none;
+      border-radius: 16px;
+      padding: 22px 22px 18px;
+
+      box-shadow: 0 12px 34px rgba(0,0,0,0.28);
+      cursor: default;
+    }
+    @media (min-width: 900px){
+      .about-card{
+        width: min(900px, 50vw);
+        max-width: 50vw;
+      }
+    }
+
+    .about-card h1{
+      font-size: 20px;
+      margin-bottom: 8px;
+    }
+    .about-card h2{
+      font-size: 14px;
+      margin-bottom: 12px;
+      opacity: 0.9;
+      font-weight: 700;
+    }
+    .about-card p{
+      font-size: 14px;
+      line-height: 1.45;
+      margin-bottom: 10px;
+      opacity: 0.95;
+    }
+
+    /* подножка как у описаний: чёрная, текст белый */
+    .about-footer{
+      margin-top: 22px; /* больше отступ перед ссылками */
+      padding-top: 14px;
+      /* divider removed */
+      border-top: none;
+      display: flex;
+      align-items: center;
+      justify-content: flex-start;
+    }
+
+    .about-social{
+      display: flex;
+      gap: 12px;
+    }
+    .social-ico{
+      width: 34px;
+      height: 34px;
+      display: grid;
+      place-items: center;
+      border-radius: 8px;
+
+      background: rgba(255,255,255,0.18); /* просто серая заливка */
+      border: none; /* убрать обводку */
+      outline: none;
+      box-shadow: none;
+
+      transition: background 150ms ease, transform 120ms ease, color 150ms ease;
+      color: #fff;
+      text-decoration: none;
+      user-select: none;
+      font-weight: 700;
+      line-height: 1;
+    }
+    .social-ico:hover{ background: rgba(255,255,255,0.28); }
+    .social-ico:active{ transform: scale(0.96); }
+    .social-ico svg{ display:block; fill: currentColor; }
+
+  
+
+/* ========== MOBILE DOCK (from stand) ========== */
+
+    /* Mobile UI hidden on desktop */
+    .dock-wrap, .menu-panel, .scrim{ display:none; }
+@media (max-width: 900px){
+  :root{
+    /* Mobile overlay controls vertical anchor (change this to tune UI) */
+  
+    --dock-w: 40vw;         /* dock width */
+    --dock-h: 56px;
+    --dock-radius: 18px;
+    --dock-offset-y: 22px;  /* already lowered by 20px */
+    --icon-size: 36px;      /* unified icon size (all icons same) */
+
+    /* slider card size on mobile (smaller for safe swipe) */
+    --slide-w: 300px;
+    --slide-h: 380px;
+
+    --menu-w: 80vw;         /* menu width stays 80% */
+    --menu-radius: 18px;
+  }
+
+  /* desktop header hidden on mobile (menu replaces it) */
+  .top-header{ display:none !important; }
+
+  /* desktop buttons hidden on mobile */
+  .pp-btn, .view-btn{ display:none !important; }
+
+  /* overlay L/R hidden on mobile (swipe only) */
+  .overlay .nav-btn{ display:none !important; }
+
+  /* show mobile UI */
+  .dock-wrap, .menu-panel, .scrim{ display:block; }
+
+  /* Mobile overlay UI sizing (scaled down ~40%) */
+  .overlay .info-btn{
+    width: 22px;
+    height: 22px;
+    font-size: 12px;
+  }
+  .overlay .below-ui .number{
+    font-size: 10px;
+  }
+  .close-btn{
+    width: 22px;
+    height: 22px;
+    /* drop down from top to avoid notch */
+    top: calc(env(safe-area-inset-top) + 40px + 100px);
+    right: 24px;
+  }
+  .close-btn::before, .close-btn::after{
+    width: 14px;
+    height: 2px;
+  }
+
+  /* Pin number + info button to a screen-relative line (edit --m-below-ui-bottom to tune) */
+  .overlay .below-ui{
+    position: fixed;
+    left: 50%;
+    transform: translateX(-50%);
+    top: auto;
+    bottom: var(--m-below-ui-bottom, 22vh);
+    width: min(92vw, 560px);
+    padding: 0 10px;
+  }
+
+  /* mobile info popup: 80% width, adaptive height */
+  .overlay .info-popup{
+    max-width: 80vw !important;
+    width: 80vw;
+    height: auto;
+    max-height: 70vh;
+  }
+
+  /* keep image perfectly centered on mobile */
+  .overlay{ padding-left: 0; padding-right: 0; }
+  .overlay .figure{ max-width: calc(100vw - 32px); margin: 0 auto; }
+  .overlay .figure img{ border-radius: 12px; }
+
+  .dock-wrap{
+    position: fixed;
+    left: 50%;
+    transform: translateX(-50%);
+    bottom: calc(env(safe-area-inset-bottom) + var(--dock-offset-y));
+    width: var(--dock-w);
+    z-index: 900; /* under overlay (1000) */
+  }
+  .dock{
+    width: 100%;
+    height: var(--dock-h);
+    border-radius: var(--dock-radius);
+    background: transparent;
+    border: none;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    overflow: hidden;
+  }
+  .dock-btn{
+    appearance:none;
+    border:none;
+    background: #EFEFEF;
+    height: 100%;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    padding: 0;
+    color:#D1CFCF;
+    cursor:pointer;
+    -webkit-tap-highlight-color: transparent;
+    user-select:none;
+  }
+  .dock-btn:focus{ outline:none; }
+  .dock-btn.is-active{
+    background:#434343;
+    color:#EFEFEF;
+  }
+
+  .dock-label{ display:none !important; }
+
+  .icon{
+    width: var(--icon-size);
+    height: var(--icon-size);
+    display: inline-block;
+    position: relative;
+  }
+  .icon svg{
+    width: 100%;
+    height: 100%;
+    display:block;
+    fill: currentColor;
+    shape-rendering: crispEdges;
+  }
+
+  /* keep both states perfectly aligned (no jump) */
+  .gallery-icon svg,
+  #menuIcon svg{
+    position:absolute;
+    inset:0;
+  }
+
+  /* gallery icons swap */
+  .gallery-icon .is-off{ display:block; }
+  .gallery-icon .is-on{ display:none; }
+  .dock-btn.gallery.is-active .gallery-icon .is-off{ display:none; }
+  .dock-btn.gallery.is-active .gallery-icon .is-on{ display:block; }
+
+  /* burger/x swap */
+  #burgerSvg{ display:block; }
+  #xSvg{ display:none; }
+  .dock-btn.menu-open #burgerSvg{ display:none; }
+  .dock-btn.menu-open #xSvg{ display:block; }
+
+  /* menu (no dimming) */
+  .scrim{
+    position: fixed;
+    inset: 0;
+    background: transparent; /* no dark overlay */
+    opacity: 0;
+    pointer-events: none;
+    z-index: 910;
+  }
+  .scrim.is-open{
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .menu-panel{
+    position: fixed;
+    left: 50%;
+    transform: translateX(-50%) translateY(16px);
+    bottom: calc(env(safe-area-inset-bottom) + var(--dock-offset-y) + var(--dock-h) + 14px);
+    width: var(--menu-w);
+    border-radius: var(--menu-radius);
+    background: #434343;
+    border: none;
+    box-shadow: none;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 160ms ease, transform 160ms ease;
+    z-index: 920;
+    overflow: hidden;
+  }
+  .menu-panel.is-open{
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateX(-50%) translateY(0);
+  }
+  .menu-list{ display:grid; grid-template-columns: 1fr; }
+  .menu-item{
+    appearance:none;
+    border:none;
+    background: transparent;
+    padding: 14px 16px;
+    text-align:left;
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    color: #EFEFEF;
+    cursor:pointer;
+    display:flex;
+    align-items:center;
+    justify-content: space-between;
+    -webkit-tap-highlight-color: transparent;
+  }
+  /* no dividers */
+  .menu-item + .menu-item{ border-top: none; }
+
+  .menu-item::after{
+    content: "›";
+    font-size: 20px;
+    line-height: 1;
+    color: #EFEFEF;
+    opacity: 0.9;
+    transform: translateY(-1px);
+  }
+
+  /* mobile gallery: 2 cols, 3 on big phones; adjust safe areas for dock */
+  body.gallery-mode .gallery-container{
+    /* tighter edges + larger tiles (keep masonry columns logic) */
+    --g-gap: 10px;
+    column-count: 2;
+    padding-top: calc(env(safe-area-inset-top) + 24px);
+    padding-bottom: calc(env(safe-area-inset-bottom) + var(--dock-offset-y) + var(--dock-h) + 24px);
+
+    /* reduce side padding for bigger images */
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  /* big phones: 3 columns */
+  @media (min-width: 520px){
+    body.gallery-mode .gallery-container{ column-count: 3; }
+  }
+
+  /* mobile overlay UI sizing + safe area */
+  .overlay .figure img{ border-radius: 12px; }
+  .overlay .popup-backdrop{ clip-path: inset(0 round 12px); }
+  .overlay .below-ui{ top: calc(100% + var(--below-offset, 20px)); }
+  .overlay .below-ui .number{ font-size: 24px; }
+  .overlay .info-btn{ width: 60px; height: 60px; font-size: 28px; }
+  .close-btn{
+    top: calc(env(safe-area-inset-top) + 16px);
+    right: 16px;
+    width: 40px;
+    height: 40px;
+  }
+  .close-btn::before, .close-btn::after{ width: 22px; height: 2.5px; }
+  .overlay .info-popup{ max-width: 80vw; }
+}
+
+
+
+/* === MOBILE OVERLAY UI OVERRIDES (fix below-ui hidden) === */
+@media (max-width: 900px){
+  /* Tune this value to move number + info button line */
+  :root{ --m-below-ui-bottom: 2vh; }
+
+  .overlay .below-ui{
+    position: fixed !important;
+    left: 50% !important;
+    transform: translateX(-50%) !important;
+    top: auto !important;
+    bottom: var(--m-below-ui-bottom, 22vh) !important;
+    width: min(92vw, 560px) !important;
+    padding: 0 10px !important;
+    z-index: 1004 !important;
+  }
+
+  .overlay .below-ui .number{
+    font-size: 16px !important;
+    line-height: 1 !important;
+  }
+
+  .overlay .info-btn{
+    width: 40px !important;
+    height: 40px !important;
+    font-size: 20px !important;
+  }
+}
+
+
+    /* iPhone hard-fix: prevent scroll anchoring / overscroll transfer during mode switch */
+    html.mode-switching, body.mode-switching {
+      overflow-anchor: none !important;
+      overscroll-behavior: none;
+    }
+
+</style>
+</head>
+
+<body>
+
+  <!-- ===== Top Header Links ===== -->
+  <div class="top-header" aria-label="Header links">
+    <a class="top-link" href="#" id="home-link">BSD Image Carousel</a>
+    <a class="top-link" href="#" id="about-link" aria-haspopup="dialog" aria-controls="about-modal">About</a>
+    <a class="top-link" href="https://github.com" target="_blank" rel="noopener">GitHub</a>
+  </div>
+
+  <!-- ===== About Modal ===== -->
+  <div class="about-modal" id="about-modal" role="dialog" aria-modal="true" aria-hidden="true">
+    <div class="about-card" role="document">
+      <h1>BSD Image Carousel</h1>
+      <h2>About the project</h2>
+      <p>
+        Это экспериментальный визуальный слайдер с диагональной механикой, автоплеем и оверлеем,
+        который превращается в «Pinterest‑подобную» галерею и обратно одним кликом.
+      </p>
+      <p>
+        Цель — аккуратный UI на шахматном фоне, “липкие” кнопки по сетке и комфортный просмотр изображений
+        как в режиме слайдов, так и в адаптивной раскладке.
+      </p>
+      <div class="about-footer" aria-label="Project links">
+        <div class="about-social">
+          <a class="social-ico" href="https://github.com" target="_blank" rel="noopener" aria-label="GitHub">GH</a>
+          <a class="social-ico" href="https://twitter.com" target="_blank" rel="noopener" aria-label="Twitter/X">X</a>
+          <a class="social-ico" href="https://www.linkedin.com" target="_blank" rel="noopener" aria-label="LinkedIn">in</a>
+        </div>
+      </div>
+</div>
+  </div>
+
+  <div class="slider-container" id="slider"></div>
+
+  <div class="gallery-container" id="gallery" aria-label="Gallery view"></div>
+
+  <div class="view-btn" id="view-btn" data-view="slider" aria-label="Toggle gallery/slider" role="button">
+            <div class="view-icon" aria-hidden="true">
+      <svg class="icon-gallery" viewBox="0 0 1000 1000" width="18" height="18" aria-hidden="true">
+        <rect x="180" y="180" width="275" height="275" rx="24" class="tile"/>
+        <rect x="545" y="180" width="275" height="275" rx="24" class="tile"/>
+        <rect x="180" y="545" width="275" height="275" rx="24" class="tile"/>
+        <rect x="545" y="545" width="275" height="275" rx="24" class="tile"/>
+      </svg>
+      <svg class="icon-line" viewBox="0 0 1000 1000" width="18" height="18" aria-hidden="true">
+        <g transform="translate(500 500) scale(1.16) translate(-500 -500)">
+          <path d="M475 375H625V525H775V775H525V625H375V475H225V225H475V375Z" class="fill"/>
+        </g>
+      </svg>
+    </div>
+  </div>
+
+    <div class="pp-btn" id="pp-btn" data-state="pause" aria-label="Pause/Play" role="button">
+    <svg class="pp-svg pp-pause" viewBox="0 0 1000 1000" width="18" height="18" aria-hidden="true">
+      <rect x="180" y="180" width="275" height="640" rx="48" class="shape"/>
+      <rect x="545" y="180" width="275" height="640" rx="48" class="shape"/>
+    </svg>
+    <svg class="pp-svg pp-play" viewBox="0 0 1000 1000" width="18" height="18" aria-hidden="true">
+      <path d="M820 500L200 820V180L820 500Z" class="shape"/>
+    </svg>
+  </div>
+
+  <div class="overlay" id="overlay" aria-hidden="true">
+    <div class="figure" id="figure">
+      <img id="overlay-img" src="" alt="" />
+
+      <div class="popup-backdrop" id="popup-backdrop" aria-hidden="true"></div>
+      <div class="info-popup" id="info-popup"></div>
+
+      <div class="below-ui" id="below-ui">
+        <div class="number" id="slide-number"></div>
+        <div class="info-btn" id="info-btn" role="button" aria-label="Описание">i</div>
+        <div></div>
+      </div>
+    </div>
+
+    <div class="close-btn" id="close-btn" aria-label="Закрыть"></div>
+    <div class="nav-btn nav-left"  id="overlay-left"  aria-label="Предыдущее изображение">L</div>
+    <div class="nav-btn nav-right" id="overlay-right" aria-label="Следующее изображение">R</div>
+  </div>
+
+  <div class="navigation">
+    <div class="left" id="nav-left"></div>
+    <div class="right" id="nav-right"></div>
+  </div>
+
+  <!-- Scrim for closing menu by tapping outside -->
+  <div class="scrim" id="scrim" aria-hidden="true"></div>
+
+  <!-- Burger menu panel (text only, 3 items) -->
+  <div class="menu-panel" id="menuPanel" role="dialog" aria-modal="true" aria-label="Menu">
+    <div class="menu-list">
+      <button class="menu-item" id="menuHome" type="button">BSD Image Carousel</button>
+      <button class="menu-item" id="menuAbout" type="button">About</button>
+      <button class="menu-item" id="menuGithub" type="button">GitHub</button>
+    </div>
+  </div>
+
+  <!-- Bottom dock -->
+  <div class="dock-wrap">
+    <div class="dock" role="navigation" aria-label="Bottom controls">
+      <!-- Gallery toggle -->
+      <button class="dock-btn gallery" id="galleryBtn" type="button" aria-pressed="false">
+        <span class="icon gallery-icon" aria-hidden="true">
+          <svg viewBox="0 0 1000 1000" class="is-off" aria-hidden="true">
+            <rect x="180" y="180" width="275" height="275" rx="0"></rect>
+            <rect x="545" y="180" width="275" height="275" rx="0"></rect>
+            <rect x="180" y="545" width="275" height="275" rx="0"></rect>
+            <rect x="545" y="545" width="275" height="275" rx="0"></rect>
+          </svg>
+          <svg viewBox="0 0 1000 1000" class="is-on" aria-hidden="true">
+            <g transform="translate(500 500) scale(1.1) translate(-500 -500)">
+              <path d="M475 375H625V525H775V775H525V625H375V475H225V225H475V375Z"></path>
+            </g>
+          </svg></span>
+        <span class="dock-label">Gallery</span>
+      </button>
+
+      <!-- Menu toggle -->
+      <button class="dock-btn" id="menuBtn" type="button" aria-pressed="false">
+        <span class="icon" aria-hidden="true" id="menuIcon">
+          <!-- burger (will swap to X) -->
+          <svg viewBox="0 0 24 24" id="burgerSvg">
+            <rect x="4" y="5.5"  width="16" height="2.6" rx="0"></rect>
+            <rect x="4" y="11" width="16" height="2.6" rx="0"></rect>
+            <rect x="4" y="16.5" width="16" height="2.6" rx="0"></rect>
+          </svg>
+          <svg viewBox="0 0 24 24" id="xSvg" style="display:none;">
+            <rect x="4" y="11" width="16" height="2.5" rx="0" transform="rotate(45 12 12)"></rect>
+            <rect x="4" y="11" width="16" height="2.5" rx="0" transform="rotate(-45 12 12)"></rect>
+          </svg>
+        </span>
+        <span class="dock-label">Menu</span>
+      </button>
+    </div>
+  </div>
+
+  
+
+  <script src="images-list.js"></script>
+  <script>
+    /* ========== DOM ========== */
+    const slider = document.getElementById("slider");
+    const overlay = document.getElementById("overlay");
+    const figure  = document.getElementById("figure");
+    const overlayImg = document.getElementById("overlay-img");
+
+    const slideNumber = document.getElementById("slide-number");
+
+    const infoBtn = document.getElementById("info-btn");
+    const infoPopup = document.getElementById("info-popup");
+    const popupBackdrop = document.getElementById("popup-backdrop");
+
+    const closeBtn = document.getElementById("close-btn");
+    const overlayLeftBtn  = document.getElementById("overlay-left");
+    const overlayRightBtn = document.getElementById("overlay-right");
+
+    const ppBtn = document.getElementById("pp-btn");
+    const viewBtn = document.getElementById("view-btn");
+    const galleryEl = document.getElementById("gallery");
+
+    const navLeftZone = document.getElementById("nav-left");
+    const navRightZone = document.getElementById("nav-right");
+
+    
+
+    function isMobileUI(){
+      return window.matchMedia && window.matchMedia("(max-width: 900px)").matches;
+    }
+
+
+    // ====== Mobile: adaptive checker cell (prevents horizontal seam strips) ======
+    // Only affects mobile layout (<=900px). Adjusts --cell slightly around 20px so that pattern step (2*cell) fits screen width.
+    (function(){
+      const root = document.documentElement;
+
+      // Keep checkerboard aligned to viewport width on mobile:
+      // we pick an integer number of "big tiles" across the screen (step = 2*cell),
+      // and set step = innerWidth / cols so it fits horizontally without a cut-off square.
+      function computeCell(){
+        if (!window.matchMedia("(max-width: 900px)").matches) return;
+
+        const w = Math.max(320, Math.round(window.innerWidth));
+        const targetCell = 20;        // your base look
+        const minCell = 16;
+        const maxCell = 26;
+
+        // choose cols so that cell is within limits and closest to target
+        let best = { cols: Math.max(6, Math.round(w / (targetCell * 2))), cell: targetCell, err: Infinity };
+
+        for (let cols = 4; cols <= 40; cols++){
+          const step = w / cols;      // step = 2*cell
+          const cell = step / 2;
+          if (cell < minCell || cell > maxCell) continue;
+
+          const err = Math.abs(cell - targetCell);
+          if (err < best.err) best = { cols, cell, err };
+        }
+
+        const step = w / best.cols;
+        const cell = step / 2;
+
+        // allow fractional values (needed to fit exactly), but keep them stable
+        root.style.setProperty("--cell", cell.toFixed(3) + "px");
+      }
+
+      computeCell();
+      window.addEventListener("resize", computeCell, {passive:true});
+      window.addEventListener("orientationchange", computeCell, {passive:true});
+    })();
+let slides = [];
+    const totalSlides = imagesList.length;
+    const visibleSlides = 13;
+    let centerIndex = Math.floor(visibleSlides / 2);
+    let currentCenterIndex = 0;
+    let overlayCurrentIndex = 0;
+
+    let isInfoStickyOpen = false;
+    let lastGalleryScrollTop = 0;
+    let isAutoplayPausedByUser = isMobileUI(); /* autoplay disabled on mobile */
+
+    /* ===== Тексты (англ.) ===== */
+    const descriptionsData = [
+      { title:"Eclipse Study", year:2023, medium:"Digital collage", style:"Minimal editorial", author:"A. Carter", text:"A restrained composition built from soft gradients and hard edges. The image balances negative space with a single luminous accent to guide the eye." },
+      { title:"Neon District", year:2021, medium:"3D render", style:"Cyber-noir", author:"M. Kwan", text:"A dense city fragment rendered with glossy surfaces and misty light. Reflections and signage create a rhythmic grid of highlights." },
+      { title:"Quiet Geometry", year:2022, medium:"Vector illustration", style:"Swiss modern", author:"L. Moreau", text:"A disciplined set of shapes aligned to an invisible baseline. The palette stays neutral so proportion and spacing do the storytelling." },
+      { title:"Coastal Poster", year:2020, medium:"Screenprint (simulated)", style:"Retro travel", author:"J. Feld", text:"Flat color fields and a bold horizon line evoke classic destination posters. The composition feels optimistic and clean." },
+      { title:"Autumn Path", year:2019, medium:"Photograph", style:"Cinematic naturalism", author:"S. Harrow", text:"Warm tones and shallow depth isolate the walkway. The scene reads like a still from a film—quiet, tactile, and inviting." },
+      { title:"Midnight Skyline", year:2024, medium:"Digital painting", style:"Urban impression", author:"N. Ibarra", text:"Loose brushwork turns lights into soft marks. The city becomes a pattern, with contrast used to suggest scale rather than detail." },
+      { title:"Palm Shade", year:2020, medium:"Photograph", style:"Lifestyle minimal", author:"E. Novak", text:"Bright sand and clean shadows create a calm, product-ready mood. The frame is composed to feel airy and uncluttered." },
+      { title:"White Noise Winter", year:2022, medium:"Digital photo edit", style:"Modern atmospheric", author:"T. Wells", text:"A muted winter palette with textured grain. The image emphasizes depth through layered haze and softened edges." },
+      { title:"Riverline", year:2018, medium:"Ink & wash (digital)", style:"Contemporary sketch", author:"K. Singh", text:"Flowing strokes map the valley like a diagram. The restraint in detail keeps the movement of water as the main character." },
+      { title:"Fog Atlas", year:2023, medium:"3D render", style:"Ambient landscape", author:"R. Yamamoto", text:"A minimal terrain study where fog does the compositional work. Subtle lighting separates planes without harsh lines." },
+      { title:"Glass & Steel", year:2021, medium:"Photograph", style:"Architectural", author:"D. Klein", text:"Strong verticals and crisp reflections make the frame feel engineered. The viewpoint turns the skyline into a set of modules." },
+      { title:"Field House", year:2017, medium:"Oil on canvas (digitized)", style:"Rural realism", author:"P. Adler", text:"A grounded scene with careful color temperature shifts. The structure anchors the frame while the field provides breath." },
+      { title:"Suspended Bridge", year:2024, medium:"Photograph", style:"Moody documentary", author:"I. Chen", text:"Mist compresses the depth and simplifies the silhouette. The bridge reads as a single strong gesture across the frame." },
+      { title:"Dune Rhythm", year:2019, medium:"Digital illustration", style:"Abstract landscape", author:"V. Rocha", text:"Repeating curves build a calm pattern. Small tonal changes create the sense of heat and distance without literal detail." },
+      { title:"Mirror Lake", year:2020, medium:"Photograph", style:"Nature minimal", author:"H. Park", text:"A near-perfect reflection splits the image into two quiet halves. The composition feels stable, almost typographic." },
+      { title:"Spring Grid", year:2022, medium:"Vector poster", style:"Contemporary design", author:"C. Bennett", text:"A controlled layout where flowers act as repeating elements. The grid keeps the scene decorative, not chaotic." },
+      { title:"Hilltop Keep", year:2016, medium:"Matte painting", style:"Fantasy realism", author:"F. Laurent", text:"A believable castle study with cinematic light. The environment supports the subject rather than competing with it." },
+      { title:"Wave Study", year:2018, medium:"Acrylic (digitized)", style:"Expressive seascape", author:"O. Rivera", text:"Directional strokes suggest motion and weight. Highlights are placed sparingly so the sea feels deep and cold." },
+      { title:"Fountain Plaza", year:2021, medium:"Photograph", style:"Travel editorial", author:"G. Stone", text:"A centered composition with lively texture in the water. Human scale is implied through architecture and spacing." },
+      { title:"Snowcap Range", year:2019, medium:"Photograph", style:"Classic landscape", author:"B. Hayes", text:"High contrast separates the peaks from the sky. The frame is simple and direct, letting the terrain speak." },
+      { title:"Forest Route", year:2020, medium:"Film photo (simulated)", style:"Analog mood", author:"M. Osei", text:"Soft grain and gentle greens create a nostalgic tone. The road acts as a leading line with a slow, steady pull." },
+      { title:"Sunflower Block", year:2023, medium:"Vector illustration", style:"Bold graphic", author:"Y. Tanaka", text:"A punchy palette and large shapes make the image read instantly. The design favors clarity over realism." },
+      { title:"Civic Square", year:2022, medium:"Photograph", style:"Urban clean", author:"S. Martin", text:"Geometry and repetition drive the frame. The fountain becomes a focal point through contrast and alignment." },
+      { title:"Woodland Stream", year:2018, medium:"Watercolor (digital)", style:"Soft natural", author:"A. Legrand", text:"Transparent layers keep the scene light. The stream is rendered as a gentle highlight path through darker foliage." },
+      { title:"Morning Panorama", year:2024, medium:"Digital painting", style:"Contemporary landscape", author:"N. Valdez", text:"A wide, airy view built from layered slopes and subtle haze. The composition prioritizes depth and calm spacing for a modern, readable scene." }
+    ];
+
+    function escapeHtml(s) {
+      return String(s ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    function getDescriptionCard(idx) {
+      const item = descriptionsData[idx % descriptionsData.length];
+      return {
+        title: item.title,
+        meta: `${item.year} • ${item.medium} • ${item.style}`,
+        author: item.author,
+        text: item.text
+      };
+    }
+
+    
+    function updatePopupLimitsFromImage() {
+      const rect = overlayImg.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
+
+      const viewportW = window.visualViewport ? window.visualViewport.width : window.innerWidth;
+      const viewportH = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+
+      let maxW, maxH;
+
+      if (isMobileUI()) {
+        // mobile spec: description popup = 80% of screen width
+        maxW = viewportW * 0.8;
+        maxH = viewportH * 0.7;
+      } else {
+        maxW = Math.min(900, rect.width * 0.8);
+        maxH = rect.height * 0.8;
+      }
+
+      infoPopup.style.setProperty("--popup-max-w", `${Math.max(260, maxW)}px`);
+      infoPopup.style.setProperty("--popup-max-h", `${Math.max(140, maxH)}px`);
+    }
+
+    function updateBelowUiOffset() {
+      const rect = overlayImg.getBoundingClientRect();
+      if (!rect.height) return;
+
+      const viewportH = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+      const gap = viewportH - rect.bottom;
+
+      let offset;
+      if (isMobileUI()) {
+        // mobile spec: divide space below image into 3 parts; UI sits at 1 segment from image
+        offset = Math.min(90, Math.max(12, (gap / 3)));
+      } else {
+        const centered = (gap / 2) - 10;
+        offset = Math.min(60, Math.max(0, centered));
+      }
+
+      figure.style.setProperty("--below-offset", `${offset}px`);
+    }
+
+    function setMotionPreset(preset) {
+      if (preset === "swipe") {
+        slider.style.setProperty("--slide-dur", "360ms");
+        slider.style.setProperty("--slide-ease", "cubic-bezier(.20,.70,.25,1)");
+      } else if (preset === "autoplay") {
+        slider.style.setProperty("--slide-dur", "520ms");
+        slider.style.setProperty("--slide-ease", "cubic-bezier(.22,.61,.36,1)");
+      } else {
+        slider.style.setProperty("--slide-dur", "480ms");
+        slider.style.setProperty("--slide-ease", "cubic-bezier(.22,.61,.36,1)");
+      }
+    }
+
+    /* ====== КЛЮЧЕВОЕ: "прилипание" кнопки к сетке по низу ====== */
+    function snapPlayPauseToGrid() {
+      const cell = parseInt(getComputedStyle(document.documentElement).getPropertyValue("--cell")) || 20;
+      const btnSize = 40;
+
+      const viewportH = window.innerHeight;
+      const base = cell * 2;
+
+      // координата top кнопки (чтобы верх совпадал с сеткой)
+      const top = viewportH - base - btnSize;
+
+      let remainder = top % cell;
+      if (remainder < 0) remainder += cell;
+
+      const snappedBottom = base + remainder;
+
+      // одна переменная для обеих кнопок
+      document.documentElement.style.setProperty("--ui-bottom", `${snappedBottom}px`);
+    }
+
+    /* ===== Play/Pause ===== */
+    let ppHideTimer = null;
+    let isAutoplayRunning = false;
+    let autoplayTimerId = null;
+    let inactivityTimerId = null;
+    let suspendAutoplayUntilUserActivity = false;
+
+    const INACTIVITY_DELAY = 10000;
+    const AUTOPLAY_INTERVAL = 2500;
+
+    function setPpVisualState() {
+      ppBtn.setAttribute("data-state", isAutoplayPausedByUser ? "play" : "pause");
+      ppBtn.classList.toggle("paused", isAutoplayPausedByUser);
+    }
+
+    function hidePp() {
+      ppBtn.classList.remove("show");
+      viewBtn.classList.remove("show");
+      if (ppHideTimer) { clearTimeout(ppHideTimer); ppHideTimer = null; }
+    }
+
+    function showPpTemporarily() {
+      if (overlay.classList.contains("active")) return;
+
+      snapPlayPauseToGrid();
+      syncHeaderVars();
+      layoutGallery();
+      layoutGallery();
+      viewBtn.classList.add("show");
+
+      // в режиме галереи play/pause не показываем
+      if (!document.body.classList.contains("gallery-mode")) {
+        ppBtn.classList.add("show");
+      }
+
+      if (isMobileUI()) return;
+      if (isAutoplayPausedByUser) return;
+
+      if (ppHideTimer) clearTimeout(ppHideTimer);
+      ppHideTimer = setTimeout(() => {
+        if (!isAutoplayPausedByUser && !overlay.classList.contains("active")) {
+          ppBtn.classList.remove("show");
+        }
+      }, 5000);
+    }
+
+    function startAutoplay(){
+      if (isMobileUI()) return;
+      if (isAutoplayRunning) return;
+      if (overlay.classList.contains("active")) return;
+      if (document.hidden) return;
+      if (suspendAutoplayUntilUserActivity) return;
+      if (isMobileUI()) return;
+      if (isAutoplayPausedByUser) return;
+
+      isAutoplayRunning = true;
+      setMotionPreset("autoplay");
+      autoplayTimerId = setInterval(()=> { prevSlide(); }, AUTOPLAY_INTERVAL);
+    }
+
+    function stopAutoplay(){
+      if (autoplayTimerId){ clearInterval(autoplayTimerId); autoplayTimerId=null; }
+      isAutoplayRunning = false;
+    }
+
+    function clearInactivityTimer(){
+      if(inactivityTimerId){ clearTimeout(inactivityTimerId); inactivityTimerId=null; }
+    }
+
+    function resetInactivityTimer(){
+      stopAutoplay();
+      clearInactivityTimer();
+      inactivityTimerId = setTimeout(()=>{ startAutoplay(); }, INACTIVITY_DELAY);
+    }
+
+    function registerActivity(){
+      if (suspendAutoplayUntilUserActivity) suspendAutoplayUntilUserActivity=false;
+      if (!isAutoplayPausedByUser && !overlay.classList.contains("active")) resetInactivityTimer();
+    }
+
+    
+    /* ===== Gallery / Slider toggle ===== */
+    let wasAutoplayRunningBeforeGallery = false;
+
+    function setViewBtnState() {
+      // в слайдере показываем “4 квадрата” (иконка галереи),
+      // в галерее — “диагональные прямоугольники” (иконка слайдера)
+      viewBtn.setAttribute("data-view", document.body.classList.contains("gallery-mode") ? "gallery" : "slider");
+    }
+
+    function buildGallery() {
+      if (!galleryEl) return;
+      galleryEl.innerHTML = "";
+      for (let i = 0; i < imagesList.length; i++) {
+        const item = document.createElement("div");
+        item.className = "gallery-item";
+        item.setAttribute("data-index", i);
+
+        const img = document.createElement("img");
+        img.src = `images/${imagesList[i]}`;
+        img.alt = `Image ${i + 1}`;
+        img.loading = "lazy";
+
+        item.appendChild(img);
+
+        // кликабельность 100% площади
+        item.addEventListener("click", (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          openOverlay(i);
+        });
+
+        galleryEl.appendChild(item);
+
+      }
+
+      // первая раскладка после ближайшего кадра
+      requestAnimationFrame(() => layoutGallery());
+    }
+
+    function sizeGalleryItem(item, img) {
+      // Gallery uses CSS columns masonry now; no JS sizing needed.
+      return;
+    }
+
+    function layoutGallery() {
+      // no-op (kept for compatibility with existing calls)
+      return;
+    }
+
+        // Mobile: use VisualViewport to compute stable 100vh (prevents iPhone Safari from "moving" layout after address bar changes)
+    function syncAppVh() {
+      if (!isMobileUI()) return;
+      const vv = window.visualViewport;
+      const h = (vv && vv.height) ? vv.height : window.innerHeight;
+      // set 1vh in px so CSS can use calc(var(--app-vh)*100)
+      document.documentElement.style.setProperty("--app-vh", `${h * 0.01}px`);
+    }
+
+
+    // Force scroll reset on mobile browsers that keep visual scroll position after heavy DOM/class changes.
+    function forceScrollTopReset() {
+      // try several times across frames; some mobile browsers ignore the first call when styles are changing
+      const attempts = [0, 1, 2];
+      attempts.forEach(() => {
+        requestAnimationFrame(() => {
+          window.scrollTo(0, 0);
+          document.documentElement.scrollTop = 0;
+          document.body.scrollTop = 0;
+        });
+      });
+      setTimeout(() => {
+        window.scrollTo(0, 0);
+        document.documentElement.scrollTop = 0;
+        document.body.scrollTop = 0;
+      }, 60);
+      setTimeout(() => {
+        window.scrollTo(0, 0);
+        document.documentElement.scrollTop = 0;
+        document.body.scrollTop = 0;
+      }, 180);
+      setTimeout(() => {
+        window.scrollTo(0, 0);
+        document.documentElement.scrollTop = 0;
+        document.body.scrollTop = 0;
+      }, 320);
+    }
+
+    // iPhone hard-fix: when leaving deep-scrolled gallery, Safari may transfer visual scroll to slider.
+    // This routine aggressively kills momentum + resets scroll on multiple carriers (window/html/body).
+    function hardResetScrollAfterGalleryExit() {
+      // only on mobile UI; keep desktop untouched
+      if (!isMobileUI()) { forceScrollTopReset(); return; }
+
+      const ua = navigator.userAgent || "";
+      const isiPhone = /iPhone/.test(ua);
+      // Detect iOS Safari specifically (exclude Chrome/Firefox/Edge wrappers)
+      const isSafari = /Safari/.test(ua) && !/CriOS|FxiOS|EdgiOS|OPiOS/.test(ua);
+
+      // During the switch, disable overscroll/anchoring via class
+      document.documentElement.classList.add("mode-switching");
+      document.body.classList.add("mode-switching");
+
+      // Try to stop any remaining momentum
+      const prevWebkit = document.body.style.webkitOverflowScrolling;
+      document.body.style.webkitOverflowScrolling = "auto";
+
+      // Temporarily lock body to decouple visual viewport from layout scroll (helps iPhone Safari)
+      const prevPos = document.body.style.position;
+      const prevTop = document.body.style.top;
+      const prevLeft = document.body.style.left;
+      const prevRight = document.body.style.right;
+      const prevWidth = document.body.style.width;
+
+      document.body.style.position = "fixed";
+      document.body.style.top = "0px";
+      document.body.style.left = "0px";
+      document.body.style.right = "0px";
+      document.body.style.width = "100%";
+
+      // Reset all known scroll carriers
+      const hardSetTop0 = () => {
+        try { window.scrollTo(0, 0); } catch(e) {}
+        document.documentElement.scrollTop = 0;
+        document.body.scrollTop = 0;
+      };
+
+      hardSetTop0();
+
+      // Restore body positioning, then re-assert scrollTop across frames/timeouts.
+      requestAnimationFrame(() => {
+        document.body.style.position = prevPos;
+        document.body.style.top = prevTop;
+        document.body.style.left = prevLeft;
+        document.body.style.right = prevRight;
+        document.body.style.width = prevWidth;
+
+        hardSetTop0();
+        requestAnimationFrame(() => hardSetTop0());
+      });
+
+      // Extra retries (iPhone needs more)
+      setTimeout(hardSetTop0, 0);
+      setTimeout(hardSetTop0, 50);
+      setTimeout(hardSetTop0, 120);
+      setTimeout(hardSetTop0, 220);
+      setTimeout(() => {
+        // release mode-switching protections
+        document.documentElement.classList.remove("mode-switching");
+        document.body.classList.remove("mode-switching");
+        document.body.style.webkitOverflowScrolling = prevWebkit;
+
+        // As a final guard, run the older reset too
+        if (isiPhone && isSafari) forceScrollTopReset();
+      }, 320);
+    }
+
+
+    // --- Gallery enter smoothing (prevents brief "reflow fly-in" on iPhone) ---
+    function settleGalleryBeforeShow() {
+      try {
+        if (!galleryEl) return Promise.resolve();
+        const imgs = Array.from(galleryEl.querySelectorAll("img")).slice(0, 10);
+        const waiters = imgs.map((img) => {
+          if (img.complete && img.naturalWidth > 0) return Promise.resolve();
+          if (typeof img.decode === "function") {
+            return img.decode().catch(() => {});
+          }
+          return new Promise((res) => {
+            img.addEventListener("load", res, { once: true });
+            img.addEventListener("error", res, { once: true });
+          });
+        });
+
+        const timeout = new Promise((res) => setTimeout(res, 180));
+        return Promise.race([Promise.all(waiters), timeout]).then(() => {
+          // Force a layout pass so columns settle before revealing
+          void galleryEl.offsetHeight;
+        });
+      } catch (e) {
+        return Promise.resolve();
+      }
+    }
+
+
+function enterGalleryMode() {
+      if (document.body.classList.contains("gallery-mode")) return;
+
+      wasAutoplayRunningBeforeGallery = isAutoplayRunning && !isAutoplayPausedByUser;
+      stopAutoplay();
+
+      document.body.classList.add("gallery-mode");
+      document.body.classList.add("gallery-prep");
+      setViewBtnState();
+
+      syncHeaderVars();
+
+
+      // отключаем зоны навигации в галерее (чтобы не блокировали клики/скролл)
+      if (document.querySelector('.navigation')) document.querySelector('.navigation').style.display = 'none';
+
+      // скрываем play/pause (и не даём показывать по таймеру)
+      ppBtn.classList.remove("show");
+
+      // в галерее разрешаем скролл
+      document.body.style.overflow = "auto";
+      document.documentElement.style.overflow = "auto";
+      buildGallery();
+      layoutGallery();
+
+      // reveal gallery only after first columns layout is settled (reduces "flying" on iPhone)
+      settleGalleryBeforeShow().then(() => {
+        if (!document.body.classList.contains("gallery-mode")) return;
+        requestAnimationFrame(() => document.body.classList.remove("gallery-prep"));
+      });
+      // safety: never keep it hidden too long
+      setTimeout(() => {
+        if (document.body.classList.contains("gallery-mode")) document.body.classList.remove("gallery-prep");
+      }, 420);
+
+      // restore last gallery scroll position (prevents jump to top when returning to gallery)
+      if (lastGalleryScrollTop > 0) {
+        requestAnimationFrame(() => {
+          if (!document.body.classList.contains("gallery-mode")) return;
+          window.scrollTo({ top: lastGalleryScrollTop, left: 0, behavior: "auto" });
+          requestAnimationFrame(() => window.scrollTo({ top: lastGalleryScrollTop, left: 0, behavior: "auto" }));
+        });
+        setTimeout(() => {
+          if (!document.body.classList.contains("gallery-mode")) return;
+          window.scrollTo({ top: lastGalleryScrollTop, left: 0, behavior: "auto" });
+        }, 80);
+      }
+      if (window.__syncPageZoomLock) window.__syncPageZoomLock();
+    }
+
+    function exitGalleryMode() {
+      if (!document.body.classList.contains("gallery-mode")) return;
+
+      // save current gallery scroll position to restore when re-entering gallery
+      lastGalleryScrollTop = window.pageYOffset || document.documentElement.scrollTop || document.body.scrollTop || 0;
+
+      document.body.classList.remove("gallery-mode");
+      document.body.classList.remove("gallery-prep");
+      setViewBtnState();
+
+      syncHeaderVars();
+
+
+      // возвращаем зоны навигации в слайдере
+      if (document.querySelector('.navigation')) document.querySelector('.navigation').style.display = '';
+
+      document.body.style.overflow = "hidden";
+      document.documentElement.style.overflow = "hidden";
+      syncAppVh();
+
+      // FIX (mobile): после глубокого скролла в галерее некоторые браузеры сохраняют "визуальный" scrollY
+      // даже после смены режима. Сбрасываем максимально жёстко, не трогая десктопную логику.
+      // 1) мгновенный сброс
+      window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+      document.documentElement.scrollTop = 0;
+      document.body.scrollTop = 0;
+
+      // 2) отключаем scroll anchoring на время перехода (иначе может "уезжать" вверх)
+      document.documentElement.style.overflowAnchor = "none";
+      document.body.style.overflowAnchor = "none";
+
+      // 3) повторяем сброс на нескольких кадрах/таймерах
+      hardResetScrollAfterGalleryExit();
+      requestAnimationFrame(() => {
+        updateSlides();
+        requestAnimationFrame(() => updateSlides());
+      });
+
+      // вернуть scroll anchoring обратно после стабилизации
+      setTimeout(() => {
+        document.documentElement.style.overflowAnchor = "";
+        document.body.style.overflowAnchor = "";
+      }, 400);
+      // возвращаем autoplay только если он был включён и пользователь не ставил на паузу
+      if (window.__syncPageZoomLock) window.__syncPageZoomLock();
+
+      if (wasAutoplayRunningBeforeGallery && !isAutoplayPausedByUser && !overlay.classList.contains("active")) {
+        startAutoplay();
+      }
+    }
+
+    viewBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (document.body.classList.contains("gallery-mode")) exitGalleryMode();
+      else enterGalleryMode();
+
+      // показать кнопки (без синего, просто проявление)
+      showPpTemporarily();
+    });
+
+ppBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      isAutoplayPausedByUser = !isAutoplayPausedByUser;
+      setPpVisualState();
+
+      if (isAutoplayPausedByUser) {
+        stopAutoplay();
+        clearInactivityTimer();
+        snapPlayPauseToGrid();
+        ppBtn.classList.add("show");
+      } else {
+        showPpTemporarily();
+        if (!isMobileUI()) resetInactivityTimer();
+    else { stopAutoplay(); clearInactivityTimer(); isAutoplayPausedByUser = true; setPpVisualState(); }
+
+      }
+    });
+
+    /* ========== СЛАЙДЕР ========== */
+    function createSlides() {
+      for (let i = 0; i < totalSlides; i++) {
+        const slide = document.createElement("div");
+        slide.classList.add("slide");
+        slide.setAttribute("data-index", i);
+
+        const img = document.createElement("img");
+        img.src = `images/${imagesList[i]}`;
+        img.alt = `Image ${i + 1}`;
+
+        slide.appendChild(img);
+        slider.appendChild(slide);
+        slides.push(slide);
+
+        slide.addEventListener("click", (e) => {
+          e.stopPropagation();
+          setMotionPreset("normal");
+          openOverlay(parseInt(slide.getAttribute("data-index"), 10));
+        });
+      }
+
+      for (let r = 0; r < centerIndex; r++) slides.unshift(slides.pop());
+      updateSlides();
+    }
+
+    function updateSlides() {
+      const sample = slides[0];
+      const slideW = sample ? (parseFloat(getComputedStyle(sample).width) || 430) : 430;
+      const slideH = sample ? (parseFloat(getComputedStyle(sample).height) || 540) : 540;
+
+      const viewportW = window.visualViewport ? window.visualViewport.width : window.innerWidth;
+      const viewportH = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+
+      const centerX = viewportW / 2 - (slideW / 2);
+      const centerY = viewportH / 2 - (slideH / 2);
+
+      const extraPad = isMobileUI() ? 360 : 600;
+      const offsetX = (window.innerWidth + extraPad) / (visibleSlides - 1);
+      const offsetY = (window.innerHeight + extraPad) / (visibleSlides - 1);
+
+      slides.forEach((slide, i) => {
+        const d = i - centerIndex;
+        const scale = 1 - Math.abs(d) * 0.1;
+        slide.style.left = `${centerX + d * offsetX}px`;
+        slide.style.top  = `${centerY + d * offsetY}px`;
+        slide.style.transform = `scale(${scale})`;
+        slide.style.zIndex = String(visibleSlides - Math.abs(d));
+      });
+
+      const centerSlide = slides[centerIndex];
+      currentCenterIndex = parseInt(centerSlide.getAttribute("data-index"), 10);
+    }
+
+    function nextSlide(){ slides.unshift(slides.pop()); updateSlides(); }
+    function prevSlide(){ slides.push(slides.shift());  updateSlides(); }
+
+    function goToIndex(targetDataIndex) {
+      const N = slides.length;
+      const centerPos = centerIndex;
+      const p = slides.findIndex(el => parseInt(el.getAttribute("data-index"),10) === targetDataIndex);
+      if (p === -1) return;
+      const k = (centerPos - p + N) % N;
+      if (k <= N/2) { for (let i=0;i<k;i++) nextSlide(); }
+      else          { for (let i=0;i<N-k;i++) prevSlide(); }
+    }
+
+    /* ========== ОВЕРЛЕЙ ========== */
+    function hideInfoPopup(alsoUnstick = false) {
+      infoPopup.classList.remove("active");
+      infoBtn.classList.remove("active");
+      popupBackdrop.classList.remove("active");
+      if (alsoUnstick) isInfoStickyOpen = false;
+    }
+
+    function showInfoPopup() {
+      updatePopupLimitsFromImage();
+      updateBelowUiOffset();
+      popupBackdrop.classList.add("active");
+      infoPopup.classList.add("active");
+      infoBtn.classList.add("active");
+    }
+
+    function renderPopupContent(idx) {
+      const card = getDescriptionCard(idx);
+      infoPopup.innerHTML = `
+        <div class="popup-title">${escapeHtml(card.title)}</div>
+        <div class="popup-body">
+          <div style="opacity:.9; margin-bottom:10px;">${escapeHtml(card.meta)}</div>
+          <div>${escapeHtml(card.text)}</div>
+        </div>
+        <div class="popup-author">${escapeHtml(card.author)}</div>
+      `;
+    }
+
+    function openOverlay(index) {
+      overlayCurrentIndex = index;
+
+      overlay.classList.add("active");
+      overlay.setAttribute("aria-hidden","false");
+      if (window.__syncPageZoomLock) window.__syncPageZoomLock();
+
+      /* в оверлее кнопка исчезает */
+      hidePp();
+
+      stopAutoplay();
+      suspendAutoplayUntilUserActivity = true;
+
+      isInfoStickyOpen = false;
+      resetOverlayZoom();
+      setOverlayContent(overlayCurrentIndex, { keepPopup: false });
+    }
+
+    function closeOverlay() {
+      overlay.classList.remove("active");
+      overlay.setAttribute("aria-hidden","true");
+      if (window.__syncPageZoomLock) window.__syncPageZoomLock();
+      resetOverlayZoom();
+
+      hideInfoPopup(false);
+      goToIndex(overlayCurrentIndex);
+
+      showPpTemporarily();
+    }
+
+    function setOverlayContent(idx, opts = {}) {
+      const shouldKeepPopup = !!opts.keepPopup && isInfoStickyOpen;
+
+      renderPopupContent(idx);
+
+      resetOverlayZoom();
+
+      if (shouldKeepPopup) showInfoPopup();
+      else hideInfoPopup(false);
+
+      overlayImg.onload = () => {
+        updatePopupLimitsFromImage();
+        updateBelowUiOffset();
+        cacheOverlayBaseRect();
+        if (shouldKeepPopup) showInfoPopup();
+      };
+
+      overlayImg.src = `images/${imagesList[idx]}`;
+      overlayImg.alt = `Image ${idx + 1}`;
+      slideNumber.textContent = `${idx + 1}/${totalSlides}`;
+    }
+
+    infoBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const isOpen = infoPopup.classList.contains("active");
+      if (isOpen) {
+        isInfoStickyOpen = false;
+        hideInfoPopup(false);
+      } else {
+        isInfoStickyOpen = true;
+        showInfoPopup();
+      }
+    });
+
+    function overlayNext() {
+      overlayCurrentIndex = (overlayCurrentIndex + 1) % totalSlides;
+      setOverlayContent(overlayCurrentIndex, { keepPopup: true });
+      goToIndex(overlayCurrentIndex);
+    }
+    function overlayPrev() {
+      overlayCurrentIndex = (overlayCurrentIndex - 1 + totalSlides) % totalSlides;
+      setOverlayContent(overlayCurrentIndex, { keepPopup: true });
+      goToIndex(overlayCurrentIndex);
+    }
+
+    /* клик вне попапа закрывает только попап */
+    overlay.addEventListener("click", (e) => {
+      if (infoPopup.classList.contains("active")) {
+        const clickedInsidePopup = infoPopup.contains(e.target);
+        const clickedInfoBtn = infoBtn.contains(e.target);
+        if (!clickedInsidePopup && !clickedInfoBtn) {
+          hideInfoPopup(true);
+          return;
+        }
+      }
+    });
+
+    infoPopup.addEventListener("click", (e) => e.stopPropagation());
+
+    overlayImg.addEventListener("click", () => {
+      // When zoomed-in, tapping should NOT close the overlay
+      if (isOverlayZoomed()) return;
+      if (!infoPopup.classList.contains("active")) closeOverlay();
+    });
+
+
+    /* ========== Mobile: prevent page zoom in Slider/Gallery (but NOT in overlay) ========== */
+    (function(){
+      let enabled = false;
+
+      function shouldLock(){
+        // lock only on mobile, in slider/gallery modes, when overlay is NOT active
+        if (!isMobileUI()) return false;
+        if (overlay.classList.contains("active")) return false;
+        return true;
+      }
+
+      function onTouch(e){
+        if (!enabled) return;
+        // block 2-finger gestures (pinch-to-zoom page)
+        if (e.touches && e.touches.length > 1) {
+          e.preventDefault();
+        }
+      }
+
+      function onGesture(e){
+        if (!enabled) return;
+        e.preventDefault();
+      }
+
+      function sync(){
+        enabled = shouldLock();
+      }
+
+      // iOS Safari gesture events
+      window.addEventListener("gesturestart", onGesture, { passive:false });
+      window.addEventListener("gesturechange", onGesture, { passive:false });
+      window.addEventListener("gestureend", onGesture, { passive:false });
+
+      document.addEventListener("touchstart", onTouch, { passive:false });
+      document.addEventListener("touchmove", onTouch, { passive:false });
+
+      // keep in sync with UI state
+      window.addEventListener("resize", sync, { passive:true });
+      document.addEventListener("visibilitychange", sync, { passive:true });
+
+      // expose for other flows (gallery/overlay toggles)
+      window.__syncPageZoomLock = sync;
+
+      sync();
+    })();
+
+    /* ========== Overlay: pinch-zoom on image (1x–3x). When zoomed, swipe is disabled. ========== */
+    const overlayZoom = {
+      scale: 1,
+      tx: 0,
+      ty: 0,
+      baseW: 0,
+      baseH: 0,
+      panning: false,
+      pinching: false,
+      startX: 0,
+      startY: 0,
+      startTx: 0,
+      startTy: 0,
+      startDist: 0,
+      startScale: 1
+    };
+
+    function clamp(n, a, b){ return Math.max(a, Math.min(b, n)); }
+
+    function cacheOverlayBaseRect(){
+      const r = overlayImg.getBoundingClientRect();
+      overlayZoom.baseW = r.width || overlayZoom.baseW;
+      overlayZoom.baseH = r.height || overlayZoom.baseH;
+    }
+
+    function clampOverlayPan(){
+      const s = overlayZoom.scale;
+      if (s <= 1.0001) { overlayZoom.tx = 0; overlayZoom.ty = 0; return; }
+      const bw = overlayZoom.baseW || overlayImg.getBoundingClientRect().width;
+      const bh = overlayZoom.baseH || overlayImg.getBoundingClientRect().height;
+      const maxX = (bw * (s - 1)) / 2;
+      const maxY = (bh * (s - 1)) / 2;
+      overlayZoom.tx = clamp(overlayZoom.tx, -maxX, maxX);
+      overlayZoom.ty = clamp(overlayZoom.ty, -maxY, maxY);
+    }
+
+    function applyOverlayTransform(){
+      clampOverlayPan();
+      overlayImg.style.transformOrigin = "center center";
+      overlayImg.style.transform = `translate(${overlayZoom.tx}px, ${overlayZoom.ty}px) scale(${overlayZoom.scale})`;
+    }
+
+    function resetOverlayZoom(){
+      overlayZoom.scale = 1;
+      overlayZoom.tx = 0;
+      overlayZoom.ty = 0;
+      overlayZoom.panning = false;
+      overlayZoom.pinching = false;
+      overlayImg.style.transformOrigin = "center center";
+      overlayImg.style.transform = "translate(0px, 0px) scale(1)";
+    }
+
+    function isOverlayZoomed(){
+      return overlayZoom.scale > 1.01;
+    }
+
+    function dist(t1, t2){
+      const dx = t2.clientX - t1.clientX;
+      const dy = t2.clientY - t1.clientY;
+      return Math.hypot(dx, dy);
+    }
+
+    function attachOverlayZoomHandlers(){
+      // Use touch events for broad mobile support; keep overlay mechanics intact.
+      overlayImg.addEventListener("touchstart", (e) => {
+        if (!overlay.classList.contains("active")) return;
+        cacheOverlayBaseRect();
+
+        if (e.touches.length === 2) {
+          overlayZoom.pinching = true;
+          overlayZoom.panning = false;
+          overlayZoom.startDist = dist(e.touches[0], e.touches[1]);
+          overlayZoom.startScale = overlayZoom.scale;
+          e.preventDefault();
+          e.stopPropagation();
+          return;
+        }
+
+        if (e.touches.length === 1 && isOverlayZoomed()) {
+          overlayZoom.panning = true;
+          overlayZoom.pinching = false;
+          overlayZoom.startX = e.touches[0].clientX;
+          overlayZoom.startY = e.touches[0].clientY;
+          overlayZoom.startTx = overlayZoom.tx;
+          overlayZoom.startTy = overlayZoom.ty;
+          e.preventDefault();
+          e.stopPropagation();
+        }
+      }, { passive:false });
+
+      overlayImg.addEventListener("touchmove", (e) => {
+        if (!overlay.classList.contains("active")) return;
+
+        if (e.touches.length === 2 && overlayZoom.pinching) {
+          const d = dist(e.touches[0], e.touches[1]);
+          const raw = overlayZoom.startScale * (d / Math.max(1, overlayZoom.startDist));
+          overlayZoom.scale = clamp(raw, 1, 3);
+          if (overlayZoom.scale <= 1.0001) {
+            overlayZoom.scale = 1;
+            overlayZoom.tx = 0;
+            overlayZoom.ty = 0;
+          }
+          applyOverlayTransform();
+
+          e.preventDefault();
+          e.stopPropagation();
+          return;
+        }
+
+        if (e.touches.length === 1 && overlayZoom.panning && isOverlayZoomed()) {
+          const dx = e.touches[0].clientX - overlayZoom.startX;
+          const dy = e.touches[0].clientY - overlayZoom.startY;
+          overlayZoom.tx = overlayZoom.startTx + dx;
+          overlayZoom.ty = overlayZoom.startTy + dy;
+          applyOverlayTransform();
+
+          e.preventDefault();
+          e.stopPropagation();
+        }
+      }, { passive:false });
+
+      overlayImg.addEventListener("touchend", (e) => {
+        if (!overlay.classList.contains("active")) return;
+
+        if (e.touches.length < 2) overlayZoom.pinching = false;
+        if (e.touches.length === 0) overlayZoom.panning = false;
+
+        // snap fully back if close to 1x
+        if (overlayZoom.scale < 1.02) {
+          overlayZoom.scale = 1;
+          overlayZoom.tx = 0;
+          overlayZoom.ty = 0;
+          applyOverlayTransform();
+        }
+      }, { passive:true });
+    }
+    attachOverlayZoomHandlers();
+
+    /* ========== События ========== */
+    document.addEventListener("keydown", (e) => {
+      if (overlay.classList.contains("active")) {
+        if (e.key === "ArrowRight") { overlayNext(); registerActivity(); }
+        if (e.key === "ArrowLeft")  { overlayPrev(); registerActivity(); }
+        if (e.key === "Escape")     { closeOverlay(); registerActivity(); }
+      } else {
+        if (e.key === "ArrowRight") { setMotionPreset("normal"); nextSlide(); registerActivity(); showPpTemporarily(); }
+        if (e.key === "ArrowLeft")  { setMotionPreset("normal"); prevSlide(); registerActivity(); showPpTemporarily(); }
+      }
+    });
+
+    window.addEventListener("mousemove", () => {
+      if (overlay.classList.contains("active")) return;
+      showPpTemporarily();
+      registerActivity();
+    });
+
+    /* свайпы на слайдере */
+    let touchStartX = 0;
+    slider.addEventListener("touchstart", (e) => {
+      touchStartX = e.touches[0].clientX;
+      registerActivity();
+    }, { passive: true });
+    slider.addEventListener("touchend", (e) => {
+      const x = e.changedTouches[0].clientX;
+      setMotionPreset("swipe");
+      /* Mobile slider: swipe direction reversed (overlay swipe unchanged) */
+      if (x < touchStartX - 50) prevSlide();
+      if (x > touchStartX + 50) nextSlide();
+      registerActivity();
+    });
+
+    /* свайпы в оверлее */
+    let overlayTouchStartX = 0;
+    overlay.addEventListener("touchstart", (e) => {
+      // If user starts pinch on the image, don't arm overlay swipe
+      if (e.touches && e.touches.length > 1) return;
+      overlayTouchStartX = e.touches[0].clientX;
+      registerActivity();
+    }, { passive: true });
+    overlay.addEventListener("touchend", (e) => {
+      // When image is zoomed-in, swipe navigation is disabled
+      if (isOverlayZoomed()) return;
+      const x = e.changedTouches[0].clientX;
+      if (x < overlayTouchStartX - 50) overlayNext();
+      if (x > overlayTouchStartX + 50) overlayPrev();
+      registerActivity();
+    });
+
+    navLeftZone.addEventListener("click",(e)=>{
+      if(e.target===navLeftZone){
+        setMotionPreset("normal");
+        prevSlide();
+        registerActivity();
+        showPpTemporarily();
+      }
+    });
+    navRightZone.addEventListener("click",(e)=>{
+      if(e.target===navRightZone){
+        setMotionPreset("normal");
+        nextSlide();
+        registerActivity();
+        showPpTemporarily();
+      }
+    });
+
+    /* чтобы не закрывать попап кликом по L/R/close */
+    overlayLeftBtn.addEventListener("click", (e) => { e.stopPropagation(); overlayPrev(); registerActivity(); });
+    overlayRightBtn.addEventListener("click",(e) => { e.stopPropagation(); overlayNext(); registerActivity(); });
+    closeBtn.addEventListener("click", (e) => { e.stopPropagation(); closeOverlay(); });
+
+    window.addEventListener("resize", () => {
+      syncAppVh();
+      updateSlides();
+      snapPlayPauseToGrid();
+      if (overlay.classList.contains("active")) {
+        updatePopupLimitsFromImage();
+        updateBelowUiOffset();
+      }
+      registerActivity();
+    });
+
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener("resize", () => {
+        syncAppVh();
+        if (!document.body.classList.contains("gallery-mode")) updateSlides();
+        if (overlay.classList.contains("active")) {
+          updatePopupLimitsFromImage();
+          updateBelowUiOffset();
+        }
+      });
+      window.visualViewport.addEventListener("scroll", () => {
+        if (overlay.classList.contains("active")) updateBelowUiOffset();
+      });
+    }
+
+    document.addEventListener("visibilitychange",()=>{
+      if (document.hidden){
+        stopAutoplay(); clearInactivityTimer();
+      } else {
+        stopAutoplay(); clearInactivityTimer(); suspendAutoplayUntilUserActivity=true;
+      }
+    });
+
+    /* ========== Старт ========== */
+    syncAppVh();
+    document.documentElement.style.overflow = "hidden";
+    setMotionPreset("normal");
+    setPpVisualState();
+    createSlides();
+    snapPlayPauseToGrid();
+    setViewBtnState();
+    if (!isMobileUI()) resetInactivityTimer();
+  
+    // ===== Header / About modal =====
+    const homeLink = document.getElementById('home-link');
+    const topHeader = document.querySelector('.top-header');
+
+    function syncHeaderVars(){
+      const cell = parseInt(getComputedStyle(document.documentElement).getPropertyValue("--cell")) || 20;
+      const offset = cell * 2;
+
+      // сдвиг хедера влево (ориентир — правый край 5-й колонки в галерее)
+      document.documentElement.style.setProperty("--header-offset", `${offset}px`);
+      document.documentElement.style.setProperty("--header-side", `${offset}px`);
+
+      const h = (topHeader && topHeader.getBoundingClientRect().height) ? Math.ceil(topHeader.getBoundingClientRect().height) : 40;
+      document.documentElement.style.setProperty("--header-h", `${h}px`);
+
+      const pad = Math.ceil(offset + h + offset);
+      document.documentElement.style.setProperty("--gallery-top-pad", `${pad}px`);
+    }
+
+    // первичная синхронизация
+    syncHeaderVars();
+
+    const aboutLink = document.getElementById('about-link');
+    const aboutModal = document.getElementById('about-modal');
+
+        function goHome(){
+      // закрыть About если открыт
+      if (aboutModal.classList.contains('active')) closeAbout();
+
+      // закрыть оверлей (и сбросить индекс)
+      overlayCurrentIndex = 0;
+      if (overlay.classList.contains('active')) closeOverlay();
+
+      // выйти из галереи и вернуться к первому слайду
+      if (document.body.classList.contains('gallery-mode')) exitGalleryMode();
+      setMotionPreset("normal");
+      goToIndex(0);
+
+      // если был скролл в галерее — наверх
+      window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+
+      syncHeaderVars();
+      showPpTemporarily();
+      registerActivity();
+    }
+
+    homeLink.addEventListener('click', (e)=>{
+      e.preventDefault();
+      e.stopPropagation();
+      goHome();
+    });
+
+
+    function openAbout(){
+      aboutModal.classList.add('active');
+      aboutModal.setAttribute('aria-hidden','false');
+      aboutLink.classList.add('active');
+    }
+    function closeAbout(){
+      aboutModal.classList.remove('active');
+      aboutModal.setAttribute('aria-hidden','true');
+      aboutLink.classList.remove('active');
+    }
+
+    aboutLink.addEventListener('click', (e)=>{
+      e.preventDefault();
+      if (aboutModal.classList.contains('active')) closeAbout();
+      else openAbout();
+    });
+
+    // закрытие кликом по затемнению (всё кроме карточки)
+    aboutModal.addEventListener('click', (e)=>{
+      if (e.target === aboutModal) closeAbout();
+    });
+
+    // не закрывать при клике внутри карточки
+    const aboutCard = aboutModal.querySelector('.about-card');
+    aboutCard.addEventListener('click', (e)=> e.stopPropagation());
+
+    // опционально: Esc закрывает
+    document.addEventListener('keydown', (e)=>{
+      if (e.key === 'Escape' && aboutModal.classList.contains('active')) closeAbout();
+    });
+
+
+// ===== Mobile dock wiring (gallery + menu) =====
+const galleryBtn = document.getElementById("galleryBtn");
+const menuBtn = document.getElementById("menuBtn");
+const scrim = document.getElementById("scrim");
+const menuPanel = document.getElementById("menuPanel");
+
+const menuHome = document.getElementById("menuHome");
+const menuAbout = document.getElementById("menuAbout");
+const menuGithub = document.getElementById("menuGithub");
+
+function setDockGalleryState(on){
+  if (!galleryBtn) return;
+  galleryBtn.classList.toggle("is-active", !!on);
+  galleryBtn.setAttribute("aria-pressed", String(!!on));
+}
+
+function setMenu(open){
+  if (!menuBtn || !scrim || !menuPanel) return;
+  const isOpen = !!open;
+  scrim.classList.toggle("is-open", isOpen);
+  menuPanel.classList.toggle("is-open", isOpen);
+  menuBtn.classList.toggle("is-active", isOpen);
+  menuBtn.classList.toggle("menu-open", isOpen);
+  menuBtn.setAttribute("aria-pressed", String(isOpen));
+  // swap burger/X icon
+  const b = document.getElementById('burgerSvg');
+  const x = document.getElementById('xSvg');
+  if (b && x){
+    b.style.display = isOpen ? 'none' : 'block';
+    x.style.display = isOpen ? 'block' : 'none';
+  }
+}
+
+// keep dock state in sync with real gallery-mode
+function syncDockState(){
+  setDockGalleryState(document.body.classList.contains("gallery-mode"));
+}
+
+if (galleryBtn){
+  galleryBtn.addEventListener("click", (e)=>{
+    e.stopPropagation();
+    if (!isMobileUI()) return;
+
+    // close menu if open
+    setMenu(false);
+
+    if (document.body.classList.contains("gallery-mode")) exitGalleryMode();
+    else enterGalleryMode();
+
+    syncDockState();
+  });
+}
+
+if (menuBtn){
+  menuBtn.addEventListener("click", (e)=>{
+    e.stopPropagation();
+    if (!isMobileUI()) return;
+    const open = !menuPanel.classList.contains("is-open");
+    setMenu(open);
+  });
+}
+
+if (scrim){
+  scrim.addEventListener("click", ()=> setMenu(false));
+}
+
+if (menuHome){
+  menuHome.addEventListener("click", ()=>{
+    setMenu(false);
+    if (typeof goHome === "function") goHome();
+    syncDockState();
+  });
+}
+
+if (menuAbout){
+  menuAbout.addEventListener("click", ()=>{
+    setMenu(false);
+    openAbout(); // use desktop about modal
+  });
+}
+
+if (menuGithub){
+  menuGithub.addEventListener("click", ()=>{
+    setMenu(false);
+    // keep same as desktop link (update later to real repo)
+    window.open("https://github.com", "_blank", "noopener,noreferrer");
+  });
+}
+
+// close menu when overlay opens / and on resize breakpoint changes
+const _openOverlay = openOverlay;
+openOverlay = function(index){
+  setMenu(false);
+  return _openOverlay(index);
+};
+
+window.addEventListener("resize", ()=>{
+  if (!isMobileUI()) setMenu(false);
+  syncDockState();
+});
+
+// initial
+syncDockState();
+
+  </script>
+</body>
+</html>
